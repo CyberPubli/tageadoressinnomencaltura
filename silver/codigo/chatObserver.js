@@ -10,6 +10,22 @@ function sendPopupEvent(event, type = 'info', data = {}) {
   });
 }
 
+// 🔧 Helper para esperas que se pueden interrumpir
+function esperarInterruptible(ms, stopFlagGetter) {
+  return new Promise(resolve => {
+    const startTime = Date.now();
+    const checkInterval = setInterval(() => {
+      if (stopFlagGetter()) {
+        clearInterval(checkInterval);
+        resolve(false); // Se interrumpió
+      } else if (Date.now() - startTime >= ms) {
+        clearInterval(checkInterval);
+        resolve(true); // Completó normalmente
+      }
+    }, 50);
+  });
+}
+
 // 🔧 FUNCIÓN HELPER: Scrollear de manera inteligente hasta el TOPE
 async function scrollearMensajesAlTopeInteligente() {
   const messagesContainer = document.querySelector('.MuiBox-root.mui-ylizsf');
@@ -129,7 +145,7 @@ window.chatObserver = {
       if (!chat) {
         console.warn(`❌ Chat ${chatNum}: div no disponible`);
         index++;
-        await new Promise(r => setTimeout(r, 800));
+        await esperarInterruptible(800, () => self.stopProcess);
         return procesarChatActual();
       }
       
@@ -138,25 +154,34 @@ window.chatObserver = {
       chat.scrollIntoView({ behavior: "smooth", block: "center" });
       chat.click();
       
-      // Esperar a que se cargue el DOM - AUMENTAR A 3000ms para chats lentos
-      await new Promise(r => setTimeout(r, 3000));
+      // Esperar a que se cargue el DOM - pero permitir interrupción
+      const cargué = await esperarInterruptible(3000, () => self.stopProcess);
+      if (!cargué) {
+        console.log("⏹️ Proceso detenido durante espera de carga");
+        return;
+      }
       
       // PASO 3: Verificar que cargó
       let chatWindow = document.querySelector('.mui-npbckn');
       let intentosCarga = 0;
       
       // Si no está, intentar esperar más
-      while (!chatWindow && intentosCarga < 10) {
+      while (!chatWindow && intentosCarga < 10 && !self.stopProcess) {
         console.log(`   ⏳ Esperando a que cargue el chat (intento ${intentosCarga + 1}/10)...`);
-        await new Promise(r => setTimeout(r, 500));
+        await esperarInterruptible(500, () => self.stopProcess);
         chatWindow = document.querySelector('.mui-npbckn');
         intentosCarga++;
+      }
+      
+      if (self.stopProcess) {
+        console.log("⏹️ Proceso detenido durante carga de chat");
+        return;
       }
       
       if (!chatWindow) {
         console.error(`❌ Chat ${chatNum}: No se cargó la ventana después de ${intentosCarga * 500 + 3000}ms`);
         index++;
-        await new Promise(r => setTimeout(r, 800));
+        await esperarInterruptible(800, () => self.stopProcess);
         return procesarChatActual();
       }
       
@@ -185,7 +210,7 @@ window.chatObserver = {
       if (caidaDetectada) {
         console.log(`🚨 Chat ${chatNum}: CAÍDA DETECTADA - Saltando`);
         index++;
-        await new Promise(r => setTimeout(r, 800));
+        await esperarInterruptible(800, () => self.stopProcess);
         return procesarChatActual();
       }
       
@@ -197,14 +222,14 @@ window.chatObserver = {
       if (urlInfo && urlInfo.caida) {
         console.log(`🚨 Chat ${chatNum}: CAÍDA DETECTADA Y PROCESADA - Saltando`);
         index++;
-        await new Promise(r => setTimeout(r, 800));
+        await esperarInterruptible(800, () => self.stopProcess);
         return procesarChatActual();
       }
       
       if (!urlInfo) {
         console.warn(`❌ Chat ${chatNum}: No se extrajo información - Saltando`);
         index++;
-        await new Promise(r => setTimeout(r, 800));
+        await esperarInterruptible(800, () => self.stopProcess);
         return procesarChatActual();
       }
       
@@ -216,42 +241,11 @@ window.chatObserver = {
       if (!urlInfo.nomenclatura) {
         console.log(`⏭️ Chat ${chatNum}: SALTADO - Sin nomenclatura`);
         index++;
-        await new Promise(r => setTimeout(r, 800));
+        await esperarInterruptible(800, () => self.stopProcess);
         return procesarChatActual();
       }
       
-      // PASO 8: Verificar si necesita letra de campaña
-      const urlFinal = urlInfo.url && urlInfo.url !== 'Sin URL' ? urlInfo.url : 'Sin URL';
-      if (urlFinal !== 'Sin URL' && !urlInfo.letraCampana) {
-        console.log(`⏸️ Chat ${chatNum}: PAUSADO - Esperando letra de campaña`);
-        self.pausado = true;
-        sendPopupEvent('urlWaiting', 'warning', { url: urlFinal });
-        
-        // Guardar callback para reanudar después
-        self.callbackReanudar = async () => {
-          console.log(`▶️ Chat ${chatNum}: REANUDANDO`);
-          self.pausado = false;
-          
-          const urlInfoActualizada = await urlDetector.extractUrlFromChat();
-          if (urlInfoActualizada && urlInfoActualizada.nomenclaturas) {
-            const nomenclaturasActualizadas = urlInfoActualizada.nomenclaturas;
-            console.log(`📋 Nomenclaturas actualizadas: ${nomenclaturasActualizadas.map(n => n.nomenclatura).join(', ')}`);
-            
-            // Tagear con las nuevas nomenclaturas
-            await self.tagearMultiplesEnObservacionesAsync(nomenclaturasActualizadas, chatNum);
-          } else {
-            console.warn(`⚠️ Chat ${chatNum}: No se pudo obtener letra, saltando`);
-          }
-          
-          // CONTINUAR AL SIGUIENTE
-          index++;
-          await new Promise(r => setTimeout(r, 800));
-          return procesarChatActual();
-        };
-        return;
-      }
-      
-      // PASO 9: TAGEAR
+      // PASO 8: TAGEAR (sin necesidad de esperar letras de campaña)
       console.log(`5️⃣ Tageando...`);
       const nomenclaturas = urlInfo.nomenclaturas || [{ nomenclatura: urlInfo.nomenclatura }];
       await self.tagearMultiplesEnObservacionesAsync(nomenclaturas, chatNum);
@@ -260,7 +254,7 @@ window.chatObserver = {
       
       // PASO 10: SIGUIENTE CHAT
       index++;
-      await new Promise(r => setTimeout(r, 800));
+      await esperarInterruptible(800, () => self.stopProcess);
       return procesarChatActual();
     }
     
